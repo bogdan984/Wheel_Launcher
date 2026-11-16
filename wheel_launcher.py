@@ -18,7 +18,7 @@ import time
 
 IS_WIN = sys.platform == "win32"
 APP_NAME = "Wheel Launcher"
-APP_VERSION = "2.1.0"
+APP_VERSION = "2.1.1"
 RES_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
 AXIS_NAMES = ["X", "Y", "Z", "R", "U", "V"]
 HYST = 0.10  # гистерезис оси: отпускается на 10 % ниже порога нажатия
@@ -726,6 +726,8 @@ def _w32():
                 (u32.GetClassNameW, (W.HWND, W.LPWSTR, ctypes.c_int), ctypes.c_int),
                 (u32.GetWindowTextW, (W.HWND, W.LPWSTR, ctypes.c_int), ctypes.c_int),
                 (u32.IsWindowVisible, (W.HWND,), W.BOOL),
+                (u32.IsWindow, (W.HWND,), W.BOOL),
+                (u32.GetWindowRect, (W.HWND, ctypes.POINTER(W.RECT)), W.BOOL),
                 (u32.GetWindowThreadProcessId, (W.HWND, ctypes.POINTER(W.DWORD)), W.DWORD),
                 (u32.SendMessageW, (W.HWND, W.UINT, ctypes.c_size_t, ctypes.c_ssize_t), ctypes.c_ssize_t),
                 (u32.PostMessageW, (W.HWND, W.UINT, ctypes.c_size_t, ctypes.c_ssize_t), W.BOOL),
@@ -822,7 +824,7 @@ def _away(h):
     _w32()[2].SetWindowPos(h, None, -32000, -32000, 0, 0, 0x15)
 
 
-def open_joycpl(device=""):
+def open_joycpl(device="", cancel=None):
     """Открыть «Свойства» руля в joy.cpl за краем экрана. (pid joy.cpl или None, сообщение).
     Драйвер части рулей отдаёт кнопки/оси играм только пока эти «Свойства» открыты."""
     if not IS_WIN:
@@ -866,7 +868,7 @@ def open_joycpl(device=""):
         found = None
         for _ in range(150):
             found = find_wheel()
-            if found:
+            if found or (cancel and cancel()):
                 break
             time.sleep(0.1)
         if not found:
@@ -885,9 +887,10 @@ def open_joycpl(device=""):
         sheets = []
         for _ in range(150):
             sheets = [w for w in _windows() if w != main and _wpid(w) == dlg_pid and u32.IsWindowVisible(w)]
-            if sheets:
+            if sheets or (cancel and cancel()):
                 break
             time.sleep(0.1)
+        _JOY_HWNDS[:] = [main] + sheets
         _away(main)
         for h in sheets:
             _away(h)
@@ -905,19 +908,62 @@ def open_joycpl(device=""):
     return dlg_pid, "свойства руля открыты (окно за краем экрана)"
 
 
+_JOY_HWNDS = []     # окна joy.cpl, которые открыли мы (на случай, если pid окажется не тот)
+_AWAY = -30000      # окна joy.cpl уводятся за экран на -32000: так узнаём «хвосты» прошлого запуска
+
+
+def _visible_windows(pid):
+    u32 = _w32()[2]
+    return [w for w in _windows() if _wpid(w) == pid and u32.IsWindowVisible(w)]
+
+
 def close_joycpl(pid):
-    # Сначала закрываем окна (WM_CLOSE): после принудительного завершения страницы свойств драйвер Saitek
-    # перестаёт отдавать колесо, пока X52 не переподключат. Первый WM_CLOSE закрывает свойства, второй — joy.cpl.
-    if IS_WIN and pid:
-        try:
-            for force in ([], [], [], ["/F"]):
+    """Закрыть окна joy.cpl. Сначала вежливо (WM_CLOSE: первое закрывает «Свойства», второе — joy.cpl): после
+    принудительного завершения страницы свойств драйвер может перестать отдавать руль до переподключения.
+    Если окна не закрылись — завершаем процесс."""
+    if not IS_WIN:
+        return
+    try:
+        u32 = _w32()[2]
+        for _ in range(3):
+            ws = set(_visible_windows(pid)) if pid else set()
+            ws |= {w for w in _JOY_HWNDS if u32.IsWindow(w)}
+            if not ws:
+                break
+            for w in ws:
+                u32.PostMessageW(w, 0x0010, 0, 0)               # WM_CLOSE
+            for _ in range(15):
+                time.sleep(0.1)
+                if not any(u32.IsWindow(w) and u32.IsWindowVisible(w) for w in ws):
+                    break
+        _JOY_HWNDS[:] = [w for w in _JOY_HWNDS if u32.IsWindow(w)]
+        if pid:
+            for force in ([], ["/F"]):      # процесс мог остаться без окон — добиваем
                 r = subprocess.run(["taskkill", "/PID", str(pid), "/T"] + force, capture_output=True,
                                    timeout=10, creationflags=0x08000000)
                 if r.returncode == 128:     # процесса уже нет
                     break
-                time.sleep(0.5)
-        except Exception:  # noqa
-            pass
+                time.sleep(0.3)
+    except Exception:  # noqa
+        pass
+
+
+def close_stale_joycpl():
+    """Окна joy.cpl, оставшиеся за экраном от прошлого запуска (программу закрыли аварийно): закрыть."""
+    if not IS_WIN:
+        return
+    try:
+        ctypes, W, u32, _k, _ = _w32()
+        pids = set()
+        for w in _windows():
+            if _wclass(w) == "#32770" and u32.IsWindowVisible(w):
+                r = W.RECT()
+                if u32.GetWindowRect(w, ctypes.byref(r)) and r.left <= _AWAY and r.top <= _AWAY:
+                    pids.add(_wpid(w))
+        for pid in pids:
+            close_joycpl(pid)
+    except Exception:  # noqa
+        pass
 
 
 
@@ -974,15 +1020,20 @@ def main():
 
         def task():
             close_joycpl(jc["pid"])
+            close_stale_joycpl()
             pid, msg = None, ""
             for _ in range(3):    # после включения ПК список устройств заполняется не сразу
-                pid, msg = open_joycpl(st["joy"].get_name() if st["joy"] else "")
+                pid, msg = open_joycpl(st["joy"].get_name() if st["joy"] else "", lambda: st.get("closing"))
                 if pid or st.get("closing"):
                     break
-                time.sleep(5)
+                for _ in range(50):
+                    if st.get("closing"):
+                        break
+                    time.sleep(0.1)
             jc["pid"] = pid
             jc["msg"].set(("joy.cpl: " if pid else "joy.cpl: ошибка — ") + msg)
-        threading.Thread(target=task, daemon=True).start()
+        jc["thread"] = threading.Thread(target=task, daemon=True)
+        jc["thread"].start()
 
     def on_joycpl():
         cfg["joycpl"] = bool(joy_var.get())
@@ -1623,6 +1674,8 @@ def main():
         st["closing"] = True
         engine.release_all()
         output.pad.reset()
+        if jc.get("thread"):
+            jc["thread"].join(3)        # если joy.cpl как раз открывается — дождаться, чтобы потом закрыть
         close_joycpl(jc["pid"])
         root.destroy()
 
