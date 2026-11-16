@@ -148,3 +148,15 @@ def test_vigem_status_text():
     assert "работать не будет" not in vigem_status(False, False)[0]
     assert vigem_status(None, False)[1] is True
     assert vigem_installed() in (True, False, None)
+
+
+def test_window_size_saved_and_clamped():
+    from wheel_launcher import sanitize_window, window_geometry, sanitize_config
+    assert sanitize_window(None) is None and sanitize_window({"w": 100, "h": 100}) is None
+    w = sanitize_window({"w": 900, "h": 650, "x": 40, "y": 30, "zoomed": True})
+    assert w == {"w": 900, "h": 650, "x": 40, "y": 30, "zoomed": True}
+    assert window_geometry(w, 1920, 1080) == "900x650+40+30"
+    assert window_geometry(dict(w, x=5000), 1920, 1080) == "900x650"        # окно за экраном — без положения
+    assert window_geometry(dict(w, w=4000, h=3000), 1920, 1080) == "1920x1080+40+30"
+    assert sanitize_config({"window": {"w": 900, "h": 650}})["window"]["x"] is None
+    assert sanitize_config(None)["window"] is None

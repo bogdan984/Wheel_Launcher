@@ -18,7 +18,7 @@ import time
 
 IS_WIN = sys.platform == "win32"
 APP_NAME = "Wheel Launcher"
-APP_VERSION = "2.0.1"
+APP_VERSION = "2.1.0"
 RES_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
 AXIS_NAMES = ["X", "Y", "Z", "R", "U", "V"]
 HYST = 0.10  # гистерезис оси: отпускается на 10 % ниже порога нажатия
@@ -619,6 +619,7 @@ def sanitize_config(cfg):
     return {"current": cur if cur in profiles else next(iter(profiles)), "profiles": profiles,
             "switch": switch, "overlay": sanitize_overlay(cfg.get("overlay")),
             "joycpl": bool(cfg.get("joycpl", True)),
+            "window": sanitize_window(cfg.get("window")),
             "pads": {n: sanitize_pad((cfg.get("pads") or {}).get(n)) for n in profiles}}
 
 
@@ -652,6 +653,32 @@ def unique_name(name, existing):
     while n in existing:
         n, i = "%s (%d)" % (name, i), i + 1
     return n
+
+
+MIN_WIN = (700, 460)
+
+
+def sanitize_window(o):
+    """Сохранённые размер/положение окна: {"w","h","x","y","zoomed"} или None."""
+    if not isinstance(o, dict):
+        return None
+
+    def num(k, lo, hi):
+        v = o.get(k)
+        return int(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and lo <= v <= hi else None
+    w, h = num("w", MIN_WIN[0], 10000), num("h", MIN_WIN[1], 10000)
+    if w is None or h is None:
+        return None
+    return {"w": w, "h": h, "x": num("x", -20000, 20000), "y": num("y", -20000, 20000), "zoomed": bool(o.get("zoomed"))}
+
+
+def window_geometry(win, sw, sh):
+    """Строка geometry для Tk: размер не больше экрана, положение — только если окно остаётся на экране."""
+    w, h = min(win["w"], sw), min(win["h"], sh)
+    x, y = win["x"], win["y"]
+    if x is None or y is None or x + w < 100 or y + h < 100 or x > sw - 100 or y > sh - 100:
+        return "%dx%d" % (w, h)
+    return "%dx%d+%d+%d" % (w, h, x, y)
 
 
 def load_config(path):
@@ -920,7 +947,14 @@ def main():
         root.iconbitmap(os.path.join(RES_DIR, "wheel_launcher.ico"))
     except tk.TclError:
         pass
-    root.geometry("720x520")
+    root.minsize(*MIN_WIN)
+    root.geometry(window_geometry(cfg["window"], root.winfo_screenwidth(), root.winfo_screenheight())
+                  if cfg["window"] else "780x580")
+    if cfg["window"] and cfg["window"]["zoomed"]:
+        try:
+            root.state("zoomed")
+        except tk.TclError:
+            pass
     overlay = GameOverlay(root)
 
     top = ttk.Frame(root, padding=8)
@@ -988,7 +1022,20 @@ def main():
     combo = ttk.Combobox(prof, textvariable=prof_var, state="readonly", width=24)
     combo.pack(side="left", padx=4)
 
-    tree = ttk.Treeview(root, columns=("in", "label", "key", "thr"), show="headings", height=12)
+    prof2 = ttk.Frame(root, padding=(8, 2, 8, 0))
+    prof2.pack(fill="x")
+
+    # нижние панели пакуются раньше списка: при любом размере окна «Старт» и кнопки остаются видны
+    sw_var = tk.StringVar()
+    ttk.Label(root, textvariable=sw_var, padding=(8, 0, 8, 6)).pack(side="bottom", anchor="w")
+    btns2 = ttk.Frame(root, padding=(8, 0, 8, 2))
+    btns2.pack(side="bottom", fill="x")
+    btns = ttk.Frame(root, padding=(8, 4))
+    btns.pack(side="bottom", fill="x")
+    run_btn = ttk.Button(btns, text="Старт", width=12)
+    run_btn.pack(side="right")
+
+    tree = ttk.Treeview(root, columns=("in", "label", "key", "thr"), show="headings", height=8)
     for c, t, w in (("in", "Вход руля", 170), ("label", "Подпись (за что отвечает)", 260),
                     ("key", "Клавиша", 100), ("thr", "Порог оси, %", 100)):
         tree.heading(c, text=t)
@@ -996,11 +1043,6 @@ def main():
     tree.tag_configure("hot", background="#1e6fd9", foreground="white")
     tree.pack(fill="both", expand=True, padx=8, pady=8)
 
-    btns = ttk.Frame(root, padding=8)
-    btns.pack(fill="x")
-    run_btn = ttk.Button(btns, text="Старт")
-    sw_var = tk.StringVar()
-    ttk.Label(root, textvariable=sw_var, padding=(8, 0, 8, 8)).pack(anchor="w")
 
     def bindings():
         return cfg["profiles"][cfg["current"]]
@@ -1141,9 +1183,10 @@ def main():
         cfg["pads"][name] = pad
         switch_profile(name)
 
-    for t, f in (("Новый", new_profile), ("Переименовать", rename_profile), ("Удалить", del_profile),
-                 ("Сохранить в файл…", save_profile), ("Добавить из файла…", load_profile)):
+    for t, f in (("Новый", new_profile), ("Переименовать", rename_profile), ("Удалить", del_profile)):
         ttk.Button(prof, text=t, command=f).pack(side="left", padx=2)
+    for t, f in (("Сохранить в файл…", save_profile), ("Добавить из файла…", load_profile)):
+        ttk.Button(prof2, text=t, command=f).pack(side="left", padx=2)
 
     def read_joy():
         j = st["joy"]
@@ -1487,12 +1530,13 @@ def main():
         ttk.Button(f, text="Проверить", command=test).grid(row=6, column=0, sticky="w", pady=(10, 0))
         ttk.Button(f, text="OK", command=ok).grid(row=6, column=2, sticky="e", pady=(10, 0))
 
-    for t, fn in (("Добавить", add), ("Удалить", delete), ("Подпись…", edit_label), ("Клавиша…", edit_key),
-                  ("Порог оси…", edit_threshold), ("Переключение профилей…", switch_dialog),
-                  ("Геймпад…", pad_dialog), ("Надпись поверх игры…", overlay_dialog)):
-        ttk.Button(btns, text=t, command=fn).pack(side="left", padx=2)
+    for row, items in ((btns, (("Добавить", add), ("Удалить", delete), ("Подпись…", edit_label),
+                               ("Клавиша…", edit_key), ("Порог оси…", edit_threshold))),
+                       (btns2, (("Переключение профилей…", switch_dialog), ("Геймпад…", pad_dialog),
+                                ("Надпись поверх игры…", overlay_dialog)))):
+        for t, fn in items:
+            ttk.Button(row, text=t, command=fn).pack(side="left", padx=2)
     run_btn.config(command=toggle)
-    run_btn.pack(side="right")
 
     def connect():
         pygame.joystick.quit()
@@ -1548,7 +1592,34 @@ def main():
                     st["pad_on"] = False
         root.after(8, tick)
 
+    def remember_window(_=None):
+        """Запомнить размер и положение окна (после паузы, чтобы не писать файл на каждый пиксель)."""
+        st["win_job"] = None
+        zoomed = root.state() == "zoomed"
+        if root.state() not in ("normal", "zoomed"):
+            return
+        if zoomed:
+            win = dict(cfg["window"] or {"w": 780, "h": 580, "x": None, "y": None}, zoomed=True)
+        else:
+            m = re.match(r"(\d+)x(\d+)\+(-?\d+)\+(-?\d+)", root.geometry())
+            if not m:
+                return
+            win = {"w": int(m[1]), "h": int(m[2]), "x": int(m[3]), "y": int(m[4]), "zoomed": False}
+        win = sanitize_window(win)
+        if win and win != cfg["window"]:
+            cfg["window"] = win
+            save()
+
+    def on_configure(e):
+        if e.widget is root:
+            if st.get("win_job"):
+                root.after_cancel(st["win_job"])
+            st["win_job"] = root.after(600, remember_window)
+
+    root.bind("<Configure>", on_configure)
+
     def on_close():
+        remember_window()
         st["closing"] = True
         engine.release_all()
         output.pad.reset()
