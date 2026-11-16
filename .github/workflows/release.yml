@@ -28,7 +28,11 @@ jobs:
       - name: Сборка программы
         shell: pwsh
         run: |
-          pip install pyinstaller==6.16.0 pygame==2.6.1 vgamepad==0.1.0
+          # setup.py у vgamepad запускает интерактивный msiexec (драйвер ViGEmBus) и вешает сборку — вырезаем этот вызов
+          Invoke-WebRequest "https://files.pythonhosted.org/packages/8a/54/0eaddc33f84247963af078f364b37153d09fcd6cdc398f243ec3e8842c56/vgamepad-0.1.0.tar.gz" -OutFile vgamepad.tar.gz
+          tar -xzf vgamepad.tar.gz
+          (Get-Content vgamepad-0.1.0/setup.py) -replace "subprocess\.call\(\['msiexec'.*$", "pass" | Set-Content vgamepad-0.1.0/setup.py
+          pip install pyinstaller==6.16.0 pygame==2.6.1 ./vgamepad-0.1.0
           python -m PyInstaller --noconfirm --clean --windowed --onedir --noupx `
             --name "Wheel Launcher" --icon "$PWD\wheel_launcher.ico" --add-data "$PWD\wheel_launcher.ico;." `
             --collect-all vgamepad --exclude-module pytest `
