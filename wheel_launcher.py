@@ -18,7 +18,7 @@ import time
 
 IS_WIN = sys.platform == "win32"
 APP_NAME = "Wheel Launcher"
-APP_VERSION = "2.0.0"
+APP_VERSION = "2.0.1"
 RES_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
 AXIS_NAMES = ["X", "Y", "Z", "R", "U", "V"]
 HYST = 0.10  # гистерезис оси: отпускается на 10 % ниже порога нажатия
@@ -188,6 +188,31 @@ class WinInput(object):
         inp.type = 1  # INPUT_KEYBOARD
         inp.ki = self.KEYBDINPUT(0, scan, flags, 0, 0)
         self.user32.SendInput(1, self.ctypes.byref(inp), self.ctypes.sizeof(inp))
+
+
+VIGEM_URL = "https://github.com/nefarius/ViGEmBus/releases"
+
+
+def vigem_installed():
+    """Драйвер ViGEmBus в системе: True / False; None — не Windows. Проверка по службе, геймпад не создаётся."""
+    if not IS_WIN:
+        return None
+    try:
+        import winreg
+        winreg.CloseKey(winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Services\ViGEmBus"))
+        return True
+    except OSError:
+        return False
+
+
+def vigem_status(installed, enabled):
+    """(текст, всё ли в порядке) для строки состояния драйвера."""
+    if installed is None:
+        return "ViGEmBus: проверка доступна только в Windows", True
+    if installed:
+        return "ViGEmBus: драйвер установлен — виртуальный геймпад доступен", True
+    return ("ViGEmBus: драйвер НЕ установлен" + (" — геймпад в этом профиле включён, но работать не будет" if enabled else "")
+            + ". Скачайте ViGEmBus_…_x64_x86_arm64.exe, установите и перезагрузите ПК", False)
 
 
 class PadOutput(object):
@@ -938,6 +963,21 @@ def main():
     ttk.Checkbutton(top, variable=joy_var, command=on_joycpl, text=(
         "Открывать «Свойства» руля (joy.cpl) при запуске — без этого игры могут не видеть руль")).pack(anchor="w")
     ttk.Label(top, textvariable=jc["msg"]).pack(anchor="w")
+    vg_var = tk.StringVar()
+    vg_row = ttk.Frame(top)
+    vg_row.pack(anchor="w", fill="x")
+    vg_lbl = tk.Label(vg_row, textvariable=vg_var, anchor="w")
+    vg_lbl.pack(side="left")
+    vg_btn = ttk.Button(vg_row, text="Скачать драйвер", command=lambda: __import__("webbrowser").open(VIGEM_URL))
+
+    def update_vigem():
+        text, ok = vigem_status(vigem_installed(), pad_settings()["enabled"])
+        vg_var.set(text)
+        vg_lbl.config(fg="#1a8f3c" if ok else "#d12b2b")
+        if ok:
+            vg_btn.pack_forget()
+        else:
+            vg_btn.pack(side="left", padx=6)
     now_var = tk.StringVar(value="Нажато на руле: —")
     ttk.Label(top, textvariable=now_var).pack(anchor="w")
 
@@ -989,6 +1029,8 @@ def main():
             tree.insert("", "end", iid=str(i), values=(input_label(b["input"]), lab, key_label(b["key"]),
                                                        b["threshold"] if axis else "—"))
         st["hot"] = set()
+        if "update_vigem" in st:
+            st["update_vigem"]()
         sw_var.set("Следующий профиль: %s    Предыдущий: %s" % (sw_text(cfg["switch"]["next"]),
                                                                sw_text(cfg["switch"]["prev"])))
 
@@ -1006,17 +1048,20 @@ def main():
         refresh()
         show_overlay()
 
+    st["update_vigem"] = update_vigem
+
     def pad_check():
+        update_vigem()
         """Нужен ли в профиле виртуальный геймпад и создаётся ли он; иначе объясняем, что делать."""
         if not (pad_settings()["enabled"] or any(b["key"] in PAD_BUTTONS for b in bindings())):
             return
         if output.pad.ensure():
             return
         if messagebox.askyesno(APP_NAME, "Не удалось создать виртуальный геймпад:\n%s\n\nСкорее всего не установлен драйвер "
-                               "ViGEmBus. Установите его (откроется страница загрузки: файл ViGEmBus_…_x64_x86_arm64.exe), "
+                               "ViGEmBus. Установите его (откроется официальная страница загрузки: файл ViGEmBus_…_x64_x86_arm64.exe), "
                                "перезагрузите ПК и запустите программу снова.\n\nОткрыть страницу загрузки?" % output.pad.err):
             import webbrowser
-            webbrowser.open("https://github.com/nefarius/ViGEmBus/releases/latest")
+            webbrowser.open(VIGEM_URL)
 
     def stop():
         st["running"] = False
@@ -1361,6 +1406,13 @@ def main():
             ttk.Label(f, textvariable=v, width=20).grid(row=r, column=1, sticky="w")
             ttk.Button(f, text="Назначить…", command=lambda k=kind: learn_pedal(k)).grid(row=r, column=2, padx=2)
             ttk.Button(f, text="Сбросить", command=lambda k=kind: clear(k)).grid(row=r, column=3)
+        dlg_vg = tk.Label(f, anchor="w", justify="left", wraplength=480)
+        dlg_vg.grid(row=11, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        vtext, vok = vigem_status(vigem_installed(), pd["enabled"])
+        dlg_vg.config(text=vtext, fg="#1a8f3c" if vok else "#d12b2b")
+        if not vok:
+            ttk.Button(f, text="Скачать драйвер", command=lambda: __import__("webbrowser").open(VIGEM_URL)).grid(
+                row=11, column=3, pady=(8, 0))
         ttk.Label(f, textvariable=live, font=("Consolas", 10)).grid(row=7, column=0, columnspan=4, sticky="w", pady=6)
         ttk.Label(f, textvariable=msg, foreground="#1e6fd9").grid(row=8, column=0, columnspan=4, sticky="w")
         ttk.Label(f, text="Назначенные здесь оси и кнопки не нажимают клавиши. Остальные кнопки руля можно\n"
@@ -1377,6 +1429,7 @@ def main():
             save()
             win.destroy()
             refresh()
+            update_vigem()
         ttk.Button(f, text="OK", command=ok).grid(row=10, column=3, sticky="e", pady=(10, 0))
 
     def overlay_dialog():
@@ -1505,6 +1558,7 @@ def main():
     root.protocol("WM_DELETE_WINDOW", on_close)
     connect()
     refresh()
+    update_vigem()
     tick()
     if cfg["joycpl"]:
         root.after(300, start_joycpl)

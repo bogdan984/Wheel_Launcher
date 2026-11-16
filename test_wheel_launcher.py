@@ -138,3 +138,13 @@ def test_pad_config_per_profile():
     c = sanitize_config({"profiles": {"A": [], "B": []}, "pads": {"A": {"enabled": True, "axis": 2}, "Z": {}}})
     assert c["pads"]["A"]["enabled"] is True and c["pads"]["A"]["axis"] == 2
     assert c["pads"]["B"]["enabled"] is False and "Z" not in c["pads"]
+
+
+def test_vigem_status_text():
+    from wheel_launcher import vigem_status, vigem_installed
+    assert vigem_status(True, True)[1] is True and "установлен" in vigem_status(True, False)[0]
+    txt, ok = vigem_status(False, True)
+    assert ok is False and "НЕ установлен" in txt and "работать не будет" in txt
+    assert "работать не будет" not in vigem_status(False, False)[0]
+    assert vigem_status(None, False)[1] is True
+    assert vigem_installed() in (True, False, None)
