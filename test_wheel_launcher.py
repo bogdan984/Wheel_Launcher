@@ -200,3 +200,10 @@ def test_copy_settings_between_profiles():
     assert cfg["profiles"]["Обзор"][-1]["input"] == "btn2" and cfg["pads"]["Обзор"]["brake"] == "axis1+"
     cfg["profiles"]["Обзор"][-1]["key"] = "z"
     assert cfg["profiles"]["Движение"][1]["key"] == "s"          # копия, а не общая ссылка
+
+
+def test_pad_rows_shown_in_list():
+    from wheel_launcher import pad_rows, sanitize_pad
+    assert pad_rows(sanitize_pad({})) == []                      # геймпад выключен — строк нет
+    r = pad_rows(sanitize_pad({"enabled": True, "axis": 0, "throttle": "axis1-", "brake": "btn3"}))
+    assert [x[0] for x in r] == ["steer", "throttle", "brake"] and r[0][1] == "Ось X"

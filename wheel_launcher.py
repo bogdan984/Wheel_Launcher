@@ -18,7 +18,7 @@ import time
 
 IS_WIN = sys.platform == "win32"
 APP_NAME = "Wheel Launcher"
-APP_VERSION = "2.3.2"
+APP_VERSION = "2.3.3"
 RES_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
 AXIS_NAMES = ["X", "Y", "Z", "R", "U", "V"]
 HYST = 0.10  # гистерезис оси: отпускается на 10 % ниже порога нажатия
@@ -465,6 +465,17 @@ def copy_settings(cfg, src, rows, steer, pedals, targets):
                 tp[k] = spad[k]
         n += 1
     return n
+
+
+def pad_rows(pd):
+    """Строки списка привязок для виртуального геймпада: руль и педали (только просмотр, правка — «Геймпад…»)."""
+    if not pd["enabled"]:
+        return []
+    out = [("steer", input_label("axis%d+" % pd["axis"]).rstrip("+").strip(), "Геймпад: поворот руля (левый стик X)", "Геймпад")]
+    for k, name, what in (("throttle", pd["throttle"], "газ (правый курок RT)"), ("brake", pd["brake"], "тормоз (левый курок LT)")):
+        if name:
+            out.append((k, input_label(name), "Геймпад: " + what, "Геймпад"))
+    return out
 
 
 def active_rows(bindings, axes, buttons, hats):
@@ -1173,6 +1184,8 @@ def main():
                 ("  (занято виртуальным геймпадом)" if b["input"] in pbusy else "")
             tree.insert("", "end", iid=str(i), values=(input_label(b["input"]), lab, key_label(b["key"]),
                                                        b["threshold"] if axis else "—"))
+        for k, a, lab, t in pad_rows(pad_settings()):
+            tree.insert("", "end", iid="pad_" + k, values=(a, lab, t, "—"))
         st["hot"] = set()
         if "update_vigem" in st:
             st["update_vigem"]()
@@ -1401,7 +1414,7 @@ def main():
 
     def selected():
         sel = tree.selection()
-        return bindings()[tree.index(sel[0])] if sel else None
+        return bindings()[tree.index(sel[0])] if sel and tree.index(sel[0]) < len(bindings()) else None
 
     def delete():
         b = selected()
@@ -1427,7 +1440,7 @@ def main():
             save()
             refresh()
 
-    tree.bind("<Double-1>", lambda e: edit_label())
+    tree.bind("<Double-1>", lambda e: pad_dialog() if (tree.selection() or [""])[0].startswith("pad_") else edit_label())
 
     def switch_dialog():
         if st["joy"] is None:
@@ -1736,7 +1749,7 @@ def main():
             hot = active_rows(bindings(), axes, buttons, hats)
             if hot != st["hot"]:
                 for iid in tree.get_children():
-                    tree.item(iid, tags=("hot",) if int(iid) in hot else ())
+                    tree.item(iid, tags=("hot",) if iid.isdigit() and int(iid) in hot else ())
                 st["hot"] = hot
             L = st["learn"]
             if L:
