@@ -18,7 +18,7 @@ import time
 
 IS_WIN = sys.platform == "win32"
 APP_NAME = "Wheel Launcher"
-APP_VERSION = "2.3.6"
+APP_VERSION = "2.3.7"
 RES_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
 AXIS_NAMES = ["X", "Y", "Z", "R", "U", "V"]
 HYST = 0.10  # гистерезис оси: отпускается на 10 % ниже порога нажатия
@@ -1497,7 +1497,11 @@ def main():
 
     def edit_threshold():
         b = selected()
-        if not b or not b["input"].startswith("axis"):
+        if not b:
+            messagebox.showinfo(APP_NAME, "Сначала выберите в списке привязку к оси (строка «Ось … +/−»).")
+            return
+        if not b["input"].startswith("axis"):
+            messagebox.showinfo(APP_NAME, "Диапазон задаётся только у привязок к оси. «%s» — это кнопка." % input_label(b["input"]))
             return
         v = simpledialog.askinteger(APP_NAME, "Срабатывает от, % нажатия оси (5–95):",
                                     initialvalue=b["threshold"], minvalue=5, maxvalue=95)
@@ -1818,7 +1822,7 @@ def main():
                 connect()
                 root.after(500, tick)
                 return
-            live_var.set("  ".join("%s=%+4d%%" % (AXIS_NAMES[i], round(v * 100)) for i, v in enumerate(axes[:4])))
+            live_var.set("  ".join("%s=%+4d%%" % (AXIS_NAMES[i] if i < len(AXIS_NAMES) else i, round(v * 100)) for i, v in enumerate(axes[:8])))
             pr = pressed_inputs(buttons, hats)
             now_var.set("Нажато на руле: " + (", ".join(input_label(p) for p in pr) or "—"))
             st["pad_vals"] = pad_values(pad_settings(), axes, buttons, hats)
