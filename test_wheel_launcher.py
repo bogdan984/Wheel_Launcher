@@ -119,6 +119,7 @@ def test_pad_output_routes_buttons_and_axes(monkeypatch):
         def press_button(self, button): calls.append(("press", button))
         def release_button(self, button): calls.append(("rel", button))
         def left_joystick_float(self, x_value_float, y_value_float): calls.append(("ls", x_value_float))
+        def right_joystick_float(self, x_value_float, y_value_float): pass
         def right_trigger_float(self, value_float): calls.append(("rt", value_float))
         def left_trigger_float(self, value_float): calls.append(("lt", value_float))
     vg = types.SimpleNamespace(VX360Gamepad=Pad, XUSB_BUTTON=types.SimpleNamespace(XUSB_GAMEPAD_A="A"))
@@ -131,6 +132,29 @@ def test_pad_output_routes_buttons_and_axes(monkeypatch):
     out.pad.axes(0.5, 0.25, 0.0); n = len(calls); out.pad.axes(0.5, 0.25, 0.0)
     assert ("ls", 0.5) in calls and ("rt", 0.25) in calls and len(calls) == n    # без изменений — не шлёт
     e.release_all(); assert ("rel", "A") in calls
+
+
+def test_pad_analog_buttons(monkeypatch):
+    import sys, types
+    from wheel_launcher import Output, NullInput, PAD_BUTTONS
+    calls = []
+
+    class Pad:
+        def reset(self): pass
+        def update(self): pass
+        def press_button(self, button): pass
+        def release_button(self, button): pass
+        def left_joystick_float(self, x_value_float, y_value_float): calls.append(("ls", x_value_float, y_value_float))
+        def right_joystick_float(self, x_value_float, y_value_float): calls.append(("rs", x_value_float, y_value_float))
+        def right_trigger_float(self, value_float): calls.append(("rt", value_float))
+        def left_trigger_float(self, value_float): calls.append(("lt", value_float))
+    monkeypatch.setitem(sys.modules, "vgamepad", types.SimpleNamespace(VX360Gamepad=Pad, XUSB_BUTTON=None))
+    out = Output(kb=NullInput())
+    out.send("pad_rt", True); assert ("rt", 1.0) in calls
+    out.send("pad_lsu", True); assert ("ls", 0.0, 1.0) in calls
+    out.pad.axes(0.5, 0.0, 0.0); assert ("ls", 0.5, 1.0) in calls and ("rt", 1.0) in calls   # руль + кнопка вместе
+    out.send("pad_rt", False); out.send("pad_lsu", False); assert ("rt", 0.0) in calls and ("ls", 0.5, 0.0) in calls
+    assert "pad_guide" in PAD_BUTTONS
 
 
 def test_pad_config_per_profile():

@@ -18,7 +18,7 @@ import time
 
 IS_WIN = sys.platform == "win32"
 APP_NAME = "Wheel Launcher"
-APP_VERSION = "2.1.1"
+APP_VERSION = "2.2.0"
 RES_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
 AXIS_NAMES = ["X", "Y", "Z", "R", "U", "V"]
 HYST = 0.10  # гистерезис оси: отпускается на 10 % ниже порога нажатия
@@ -102,13 +102,20 @@ def key_label(k):
 
 
 PAD_ORDER = ["pad_a", "pad_b", "pad_x", "pad_y", "pad_lb", "pad_rb", "pad_ls", "pad_rs", "pad_back", "pad_start",
-             "pad_dpad_up", "pad_dpad_down", "pad_dpad_left", "pad_dpad_right"]
+             "pad_dpad_up", "pad_dpad_down", "pad_dpad_left", "pad_dpad_right", "pad_lt", "pad_rt", "pad_guide",
+             "pad_lsu", "pad_lsd", "pad_lsl", "pad_lsr", "pad_rsu", "pad_rsd", "pad_rsl", "pad_rsr"]
 PAD_BUTTONS = {"pad_a": "Геймпад A", "pad_b": "Геймпад B", "pad_x": "Геймпад X", "pad_y": "Геймпад Y",
                "pad_lb": "Геймпад LB (левый бампер)", "pad_rb": "Геймпад RB (правый бампер)",
                "pad_ls": "Геймпад LS (нажатие левого стика)", "pad_rs": "Геймпад RS (нажатие правого стика)",
                "pad_back": "Геймпад Back", "pad_start": "Геймпад Start", "pad_dpad_up": "Геймпад D-pad вверх",
                "pad_dpad_down": "Геймпад D-pad вниз", "pad_dpad_left": "Геймпад D-pad влево",
-               "pad_dpad_right": "Геймпад D-pad вправо"}
+               "pad_dpad_right": "Геймпад D-pad вправо",
+               "pad_lt": "Геймпад LT (левый триггер)", "pad_rt": "Геймпад RT (правый триггер)",
+               "pad_guide": "Геймпад Guide (кнопка Xbox)",
+               "pad_lsu": "Геймпад левый стик вверх", "pad_lsd": "Геймпад левый стик вниз",
+               "pad_lsl": "Геймпад левый стик влево", "pad_lsr": "Геймпад левый стик вправо",
+               "pad_rsu": "Геймпад правый стик вверх", "pad_rsd": "Геймпад правый стик вниз",
+               "pad_rsl": "Геймпад правый стик влево", "pad_rsr": "Геймпад правый стик вправо"}
 PICK_ORDER = KEY_ORDER + PAD_ORDER
 
 
@@ -220,10 +227,15 @@ class PadOutput(object):
     XUSB = {"pad_a": "A", "pad_b": "B", "pad_x": "X", "pad_y": "Y", "pad_lb": "LEFT_SHOULDER",
             "pad_rb": "RIGHT_SHOULDER", "pad_ls": "LEFT_THUMB", "pad_rs": "RIGHT_THUMB", "pad_back": "BACK",
             "pad_start": "START", "pad_dpad_up": "DPAD_UP", "pad_dpad_down": "DPAD_DOWN",
-            "pad_dpad_left": "DPAD_LEFT", "pad_dpad_right": "DPAD_RIGHT"}
+            "pad_dpad_left": "DPAD_LEFT", "pad_dpad_right": "DPAD_RIGHT", "pad_guide": "GUIDE"}
+    # «аналоговые» кнопки: триггеры и стики по направлениям (имя -> (что, значение))
+    ANALOG = {"pad_lt": ("lt", 1.0), "pad_rt": ("rt", 1.0),
+              "pad_lsu": ("ly", 1.0), "pad_lsd": ("ly", -1.0), "pad_lsl": ("lx", -1.0), "pad_lsr": ("lx", 1.0),
+              "pad_rsu": ("ry", 1.0), "pad_rsd": ("ry", -1.0), "pad_rsl": ("rx", -1.0), "pad_rsr": ("rx", 1.0)}
 
     def __init__(self):
         self.pad, self.vg, self.err, self.last = None, None, "", None
+        self.held, self.base = set(), (0.0, 0.0, 0.0)   # зажатые аналоговые кнопки; (руль, газ, тормоз)
 
     def ensure(self):
         if self.pad is not None:
@@ -242,23 +254,37 @@ class PadOutput(object):
     def button(self, name, down):
         if not self.ensure():
             return
+        if name in self.ANALOG:
+            (self.held.add if down else self.held.discard)(name)
+            self._apply()
+            return
         b = getattr(self.vg.XUSB_BUTTON, "XUSB_GAMEPAD_" + self.XUSB[name])
         (self.pad.press_button if down else self.pad.release_button)(button=b)
         self.pad.update()
 
     def axes(self, steer, rt, lt):
         """Левый стик по X (руль), правый триггер (газ), левый триггер (тормоз). Шлёт только изменения."""
-        cur = (round(steer, 3), round(rt, 3), round(lt, 3))
+        self.base = (steer, rt, lt)
+        self._apply()
+
+    def _apply(self):
+        """Руль/педали + нажатые кнопки-триггеры и кнопки-направления стиков (кнопка перекрывает ось)."""
+        v = {"lx": self.base[0], "ly": 0.0, "rx": 0.0, "ry": 0.0, "rt": self.base[1], "lt": self.base[2]}
+        for n in self.held:
+            k, val = self.ANALOG[n]
+            v[k] = val
+        cur = tuple(round(v[k], 3) for k in ("lx", "ly", "rx", "ry", "rt", "lt"))
         if cur == self.last or not self.ensure():
             return
         self.last = cur
-        self.pad.left_joystick_float(x_value_float=cur[0], y_value_float=0.0)
-        self.pad.right_trigger_float(value_float=cur[1])
-        self.pad.left_trigger_float(value_float=cur[2])
+        self.pad.left_joystick_float(x_value_float=cur[0], y_value_float=cur[1])
+        self.pad.right_joystick_float(x_value_float=cur[2], y_value_float=cur[3])
+        self.pad.right_trigger_float(value_float=cur[4])
+        self.pad.left_trigger_float(value_float=cur[5])
         self.pad.update()
 
     def reset(self):
-        self.last = None
+        self.last, self.held, self.base = None, set(), (0.0, 0.0, 0.0)
         if self.pad is not None:
             self.pad.reset()
             self.pad.update()
@@ -1261,11 +1287,20 @@ def main():
             refresh()
 
     def key_picker(parent, on_pick, current=None):
-        """Выпадающий список всех клавиш + кнопка «Назначить»."""
+        """Переключатель «Клавиатура / Геймпад», выпадающий список выбранной группы + кнопка «Назначить»."""
         f = ttk.Frame(parent)
-        f.combo = ttk.Combobox(f, values=[key_label(k) for k in PICK_ORDER], state="readonly", width=34, height=20)
-        if current in KEYS or current in PAD_BUTTONS:
-            f.combo.set(key_label(current))
+        grp = tk.StringVar(value="pad" if current in PAD_BUTTONS else "kb")
+        f.combo = ttk.Combobox(f, state="readonly", width=34, height=20)
+
+        def fill(_=None):
+            order = PAD_ORDER if grp.get() == "pad" else KEY_ORDER
+            f.combo["values"] = [key_label(k) for k in order]
+            f.combo.set(key_label(current) if current in order else "")
+        top_ = ttk.Frame(f)
+        top_.pack(anchor="w", pady=(0, 4))
+        for v, t in (("kb", "Клавиша клавиатуры"), ("pad", "Кнопка геймпада")):
+            ttk.Radiobutton(top_, text=t, value=v, variable=grp, command=fill).pack(side="left", padx=(0, 10))
+        fill()
         f.combo.pack(side="left")
         ttk.Button(f, text="Назначить", command=lambda: f.combo.get() in KEY_BY_LABEL
                    and on_pick(KEY_BY_LABEL[f.combo.get()])).pack(side="left", padx=6)
@@ -1278,7 +1313,7 @@ def main():
         win = tk.Toplevel(root)
         win.title("Клавиша для: %s" % input_label(b["input"]))
         win.grab_set()
-        ttk.Label(win, text="Выберите клавишу в списке или нажмите её на клавиатуре.", padding=10).pack()
+        ttk.Label(win, text="Выберите клавишу клавиатуры или кнопку геймпада (переключатель ниже),\nлибо просто нажмите клавишу на клавиатуре.", padding=10).pack()
         f = None
 
         def pick(key):
@@ -1303,7 +1338,7 @@ def main():
         stop()
         win = tk.Toplevel(root)
         win.title("Новая привязка")
-        win.geometry("420x170")
+        win.geometry("460x210")
         win.grab_set()
         msg = tk.StringVar(value="1) Поверните руль, нажмите педаль, кнопку или D-pad.\n"
                                  "Руль не трогайте 1 секунду до этого.")
