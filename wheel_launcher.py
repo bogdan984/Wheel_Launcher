@@ -18,7 +18,7 @@ import time
 
 IS_WIN = sys.platform == "win32"
 APP_NAME = "Wheel Launcher"
-APP_VERSION = "2.3.3"
+APP_VERSION = "2.3.4"
 RES_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
 AXIS_NAMES = ["X", "Y", "Z", "R", "U", "V"]
 HYST = 0.10  # гистерезис оси: отпускается на 10 % ниже порога нажатия
@@ -1417,6 +1417,19 @@ def main():
         return bindings()[tree.index(sel[0])] if sel and tree.index(sel[0]) < len(bindings()) else None
 
     def delete():
+        sel = tree.selection()
+        if sel and sel[0].startswith("pad_"):
+            k, pd = sel[0][4:], pad_settings()
+            if k == "steer":
+                if not messagebox.askyesno(APP_NAME, "Отключить виртуальный геймпад в этом профиле (руль и педали)?"):
+                    return
+                pd["enabled"] = False
+            else:
+                pd[k] = None
+            stop()
+            save()
+            refresh()
+            return
         b = selected()
         if b:
             stop()
