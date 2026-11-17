@@ -18,7 +18,7 @@ import time
 
 IS_WIN = sys.platform == "win32"
 APP_NAME = "Wheel Launcher"
-APP_VERSION = "2.3.0"
+APP_VERSION = "2.3.1"
 RES_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
 AXIS_NAMES = ["X", "Y", "Z", "R", "U", "V"]
 HYST = 0.10  # гистерезис оси: отпускается на 10 % ниже порога нажатия
@@ -1650,40 +1650,37 @@ def main():
         win = tk.Toplevel(root)
         win.title("Копировать настройки из «%s» в другие профили" % cfg["current"])
         win.grab_set()
-        f = ttk.Frame(win, padding=10)
-        f.pack(fill="both", expand=True)
-        ttk.Label(f, text="Что скопировать").grid(row=0, column=0, sticky="w")
-        ttk.Label(f, text="Куда").grid(row=0, column=1, sticky="w", padx=(20, 0))
-        steer, pedals = tk.BooleanVar(), tk.BooleanVar()
-        what = [(steer, "Поворот руля (геймпад: ось, мёртвая зона, ход)"), (pedals, "Педали (геймпад: газ и тормоз)")]
-        rows = [(tk.BooleanVar(), i, "%s → %s" % (input_label(b["input"]), key_label(b["key"]) + (
-            "  (%s)" % b["label"] if b["label"] else ""))) for i, b in enumerate(bindings())]
-        where = [(tk.BooleanVar(), n) for n in profs]
-        for r, (v, t) in enumerate(what + [(v, t) for v, _, t in rows], 1):
-            ttk.Checkbutton(f, text=t, variable=v).grid(row=r, column=0, sticky="w")
-        for r, (v, n) in enumerate(where, 1):
-            ttk.Checkbutton(f, text=n, variable=v).grid(row=r, column=1, sticky="w", padx=(20, 0))
-
-        def all_(vs, val):
-            for v in vs:
-                v.set(val)
-        ttk.Button(f, text="Отметить всё", command=lambda: all_([v for v, _ in what] + [v for v, _, _ in rows], True)
-                   ).grid(row=len(what) + len(rows) + 1, column=0, sticky="w", pady=(8, 0))
-        ttk.Button(f, text="Все профили", command=lambda: all_([v for v, _ in where], True)
-                   ).grid(row=len(where) + 1, column=1, sticky="w", padx=(20, 0), pady=(8, 0))
+        what = ["Поворот руля (геймпад: ось, мёртвая зона, ход)", "Педали (геймпад: газ и тормоз)"] + [
+            "%s → %s%s" % (input_label(b["input"]), key_label(b["key"]), "  (%s)" % b["label"] if b["label"] else "")
+            for b in bindings()]
+        boxes = []
+        for col, (title, items, allt) in enumerate((("Что скопировать (клик — отметить/снять)", what, "Отметить всё"),
+                                                     ("В какие профили (клик — отметить/снять)", profs, "Все профили"))):
+            fr = ttk.LabelFrame(win, text=title, padding=6)
+            fr.grid(row=0, column=col, sticky="nsew", padx=8, pady=8)
+            lb = tk.Listbox(fr, selectmode="multiple", exportselection=False, activestyle="none",
+                            height=min(14, max(5, len(items))), width=max(24, min(60, max(len(s) for s in items) + 2)))
+            for s in items:
+                lb.insert("end", s)
+            lb.pack(fill="both", expand=True)
+            ttk.Button(fr, text=allt, command=lambda lb=lb: lb.selection_set(0, "end")).pack(anchor="w", pady=(6, 0))
+            boxes.append(lb)
+        win.columnconfigure(0, weight=1)
+        win.columnconfigure(1, weight=1)
 
         def ok():
-            idx = [i for v, i, _ in rows if v.get()]
-            to = [n for v, n in where if v.get()]
-            if not (idx or steer.get() or pedals.get()) or not to:
+            sel, to = boxes[0].curselection(), [profs[i] for i in boxes[1].curselection()]
+            if not sel or not to:
                 messagebox.showinfo(APP_NAME, "Отметьте, что копировать, и в какие профили.", parent=win)
                 return
-            copy_settings(cfg, cfg["current"], idx, steer.get(), pedals.get(), to)
+            copy_settings(cfg, cfg["current"], [i - 2 for i in sel if i >= 2], 0 in sel, 1 in sel, to)
             save()
             win.destroy()
             messagebox.showinfo(APP_NAME, "Скопировано в профили: %s." % ", ".join(to))
-        ttk.Button(f, text="Копировать", command=ok).grid(row=len(what) + len(rows) + 2, column=1, sticky="e", pady=(10, 0))
-        ttk.Button(f, text="Отмена", command=win.destroy).grid(row=len(what) + len(rows) + 2, column=0, sticky="e", pady=(10, 0))
+        bt = ttk.Frame(win)
+        bt.grid(row=1, column=0, columnspan=2, sticky="e", padx=8, pady=(0, 8))
+        ttk.Button(bt, text="Отмена", command=win.destroy).pack(side="right", padx=4)
+        ttk.Button(bt, text="Копировать", command=ok).pack(side="right", padx=4)
 
     for row, items in ((btns, (("Добавить", add), ("Удалить", delete), ("Подпись…", edit_label),
                                ("Клавиша…", edit_key), ("Порог оси…", edit_threshold))),
