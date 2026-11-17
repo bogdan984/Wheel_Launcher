@@ -119,6 +119,7 @@ def test_pad_output_routes_buttons_and_axes(monkeypatch):
         def press_button(self, button): calls.append(("press", button))
         def release_button(self, button): calls.append(("rel", button))
         def left_joystick_float(self, x_value_float, y_value_float): calls.append(("ls", x_value_float))
+        def right_joystick_float(self, x_value_float, y_value_float): pass
         def right_trigger_float(self, value_float): calls.append(("rt", value_float))
         def left_trigger_float(self, value_float): calls.append(("lt", value_float))
     vg = types.SimpleNamespace(VX360Gamepad=Pad, XUSB_BUTTON=types.SimpleNamespace(XUSB_GAMEPAD_A="A"))
@@ -131,6 +132,29 @@ def test_pad_output_routes_buttons_and_axes(monkeypatch):
     out.pad.axes(0.5, 0.25, 0.0); n = len(calls); out.pad.axes(0.5, 0.25, 0.0)
     assert ("ls", 0.5) in calls and ("rt", 0.25) in calls and len(calls) == n    # без изменений — не шлёт
     e.release_all(); assert ("rel", "A") in calls
+
+
+def test_pad_analog_buttons(monkeypatch):
+    import sys, types
+    from wheel_launcher import Output, NullInput, PAD_BUTTONS
+    calls = []
+
+    class Pad:
+        def reset(self): pass
+        def update(self): pass
+        def press_button(self, button): pass
+        def release_button(self, button): pass
+        def left_joystick_float(self, x_value_float, y_value_float): calls.append(("ls", x_value_float, y_value_float))
+        def right_joystick_float(self, x_value_float, y_value_float): calls.append(("rs", x_value_float, y_value_float))
+        def right_trigger_float(self, value_float): calls.append(("rt", value_float))
+        def left_trigger_float(self, value_float): calls.append(("lt", value_float))
+    monkeypatch.setitem(sys.modules, "vgamepad", types.SimpleNamespace(VX360Gamepad=Pad, XUSB_BUTTON=None))
+    out = Output(kb=NullInput())
+    out.send("pad_rt", True); assert ("rt", 1.0) in calls
+    out.send("pad_lsu", True); assert ("ls", 0.0, 1.0) in calls
+    out.pad.axes(0.5, 0.0, 0.0); assert ("ls", 0.5, 1.0) in calls and ("rt", 1.0) in calls   # руль + кнопка вместе
+    out.send("pad_rt", False); out.send("pad_lsu", False); assert ("rt", 0.0) in calls and ("ls", 0.5, 0.0) in calls
+    assert "pad_guide" in PAD_BUTTONS
 
 
 def test_pad_config_per_profile():
@@ -160,3 +184,19 @@ def test_window_size_saved_and_clamped():
     assert window_geometry(dict(w, w=4000, h=3000), 1920, 1080) == "1920x1080+40+30"
     assert sanitize_config({"window": {"w": 900, "h": 650}})["window"]["x"] is None
     assert sanitize_config(None)["window"] is None
+
+
+def test_copy_settings_between_profiles():
+    from wheel_launcher import copy_settings, sanitize_config
+    cfg = sanitize_config({"profiles": {"Движение": [{"input": "btn1", "key": "w"}, {"input": "btn2", "key": "s"}],
+                                         "Обзор": [{"input": "btn1", "key": "x"}, {"input": "btn5", "key": "q"}]},
+                           "pads": {"Движение": {"enabled": True, "axis": 2, "range": 80, "throttle": "axis1-", "brake": "axis1+"}}})
+    assert copy_settings(cfg, "Движение", [0], True, False, ["Обзор", "Движение"]) == 1   # себя пропускаем
+    assert cfg["profiles"]["Обзор"] == [{"input": "btn1", "key": "w", "threshold": 30, "label": ""},
+                                        {"input": "btn5", "key": "q", "threshold": 30, "label": ""}]   # заменена, не продублирована
+    p = cfg["pads"]["Обзор"]
+    assert p["axis"] == 2 and p["range"] == 80 and p["enabled"] and p["throttle"] is None   # педали не отмечены
+    copy_settings(cfg, "Движение", [1], False, True, ["Обзор"])
+    assert cfg["profiles"]["Обзор"][-1]["input"] == "btn2" and cfg["pads"]["Обзор"]["brake"] == "axis1+"
+    cfg["profiles"]["Обзор"][-1]["key"] = "z"
+    assert cfg["profiles"]["Движение"][1]["key"] == "s"          # копия, а не общая ссылка
