@@ -18,7 +18,7 @@ import time
 
 IS_WIN = sys.platform == "win32"
 APP_NAME = "Wheel Launcher"
-APP_VERSION = "2.3.7"
+APP_VERSION = "2.3.8"
 RES_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
 AXIS_NAMES = ["X", "Y", "Z", "R", "U", "V"]
 HYST = 0.10  # гистерезис оси: отпускается на 10 % ниже порога нажатия
@@ -392,7 +392,7 @@ def detect_input(base_axes, axes, buttons, hats):
 
 
 PAD_DEFAULT = {"enabled": False, "axis": 0, "invert": False, "deadzone": 3, "range": 100,
-               "throttle": None, "brake": None, "throttle_max": 100, "brake_max": 100}
+               "throttle": None, "brake": None, "throttle_min": 3, "throttle_max": 100, "brake_min": 3, "brake_max": 100}
 
 
 def sanitize_pad(o):
@@ -402,11 +402,15 @@ def sanitize_pad(o):
     def num(k, lo, hi):
         v = o.get(k)
         return max(lo, min(hi, int(v))) if isinstance(v, (int, float)) and not isinstance(v, bool) else d[k]
+    def mn(k):   # начало диапазона педали; в старых настройках им служила общая мёртвая зона
+        v = o.get(k, o.get("deadzone", d[k]))
+        return max(0, min(95, int(v))) if isinstance(v, (int, float)) and not isinstance(v, bool) else d[k]
     return {"enabled": bool(o.get("enabled", False)), "axis": num("axis", 0, 15), "invert": bool(o.get("invert", False)),
             "deadzone": num("deadzone", 0, 30), "range": num("range", 10, 100),
             "throttle": o["throttle"] if isinstance(o.get("throttle"), str) else None,
             "brake": o["brake"] if isinstance(o.get("brake"), str) else None,
-            "throttle_max": num("throttle_max", 5, 100), "brake_max": num("brake_max", 5, 100)}
+            "throttle_min": mn("throttle_min"), "throttle_max": num("throttle_max", 5, 100),
+            "brake_min": mn("brake_min"), "brake_max": num("brake_max", 5, 100)}
 
 
 def steer_value(v, deadzone, rng, invert):
@@ -435,8 +439,8 @@ def pedal_value(name, axes, buttons, hats, deadzone=3, mx=100):
 def pad_values(pd, axes, buttons, hats):
     """(руль, газ, тормоз) для виртуального геймпада."""
     steer = steer_value(axes[pd["axis"]], pd["deadzone"], pd["range"], pd["invert"]) if pd["axis"] < len(axes) else 0.0
-    return (steer, pedal_value(pd["throttle"], axes, buttons, hats, pd["deadzone"], pd["throttle_max"]),
-            pedal_value(pd["brake"], axes, buttons, hats, pd["deadzone"], pd["brake_max"]))
+    return (steer, pedal_value(pd["throttle"], axes, buttons, hats, pd["throttle_min"], pd["throttle_max"]),
+            pedal_value(pd["brake"], axes, buttons, hats, pd["brake_min"], pd["brake_max"]))
 
 
 def pad_busy(pd):
@@ -469,7 +473,7 @@ def copy_settings(cfg, src, rows, steer, pedals, targets):
             tp = cfg["pads"].setdefault(t, dict(PAD_DEFAULT))
             tp["enabled"] = spad["enabled"]
             for k in (("axis", "invert", "deadzone", "range") if steer else ()) + (
-                    ("throttle", "brake", "throttle_max", "brake_max") if pedals else ()):
+                    ("throttle", "brake", "throttle_min", "throttle_max", "brake_min", "brake_max") if pedals else ()):
                 tp[k] = spad[k]
         n += 1
     return n
@@ -540,7 +544,7 @@ def axis_overlap(b, binds, pd):
            if o is not b and o["input"] == b["input"] and o["threshold"] <= hi and lo <= o.get("max", 100)]
     if pd["enabled"]:
         out += [t for k, t in (("throttle", "газ геймпада"), ("brake", "тормоз геймпада"))
-                if pd[k] == b["input"] and pd["deadzone"] <= hi and lo <= pd[k + "_max"]]
+                if pd[k] == b["input"] and pd[k + "_min"] <= hi and lo <= pd[k + "_max"]]
     return out
 
 
@@ -1495,6 +1499,69 @@ def main():
         if b:
             ask_label(b)
 
+    def range_dialog(parent, title, hint, lo, hi, minlo, getval, on_ok):
+        """Один понятный диалог «от % — до %» с живым значением оси; on_ok(lo, hi) зовётся только при верном вводе."""
+        win = tk.Toplevel(parent)
+        win.title(title)
+        win.transient(parent)
+        win.grab_set()
+        f = ttk.Frame(win, padding=12)
+        f.pack()
+        ttk.Label(f, text=hint, wraplength=380, justify="left").grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 8))
+        lo_v, hi_v = tk.IntVar(value=lo), tk.IntVar(value=hi)
+        ttk.Label(f, text="От, %:").grid(row=1, column=0, sticky="e")
+        ttk.Spinbox(f, from_=minlo, to=100, textvariable=lo_v, width=6).grid(row=1, column=1, padx=6)
+        ttk.Label(f, text="До, %:").grid(row=1, column=2, sticky="e")
+        ttk.Spinbox(f, from_=minlo, to=100, textvariable=hi_v, width=6).grid(row=1, column=3, padx=6)
+        live = tk.StringVar()
+        ttk.Label(f, textvariable=live, foreground="#1e6fd9").grid(row=2, column=0, columnspan=4, sticky="w", pady=8)
+
+        def upd():
+            if not win.winfo_exists():
+                return
+            v = getval()
+            live.set("Сейчас на оси: %+d %%" % round(v * 100) if v is not None else "")
+            win.after(100, upd)
+        upd()
+
+        def ok(_=None):
+            try:
+                a, b = lo_v.get(), hi_v.get()
+            except tk.TclError:
+                messagebox.showwarning(APP_NAME, "Введите целые числа.", parent=win)
+                return
+            if not (minlo <= a <= b <= 100):
+                messagebox.showwarning(APP_NAME, "Нужно: %d ≤ «от» ≤ «до» ≤ 100." % minlo, parent=win)
+                return
+            win.destroy()
+            on_ok(a, b)
+        bt = ttk.Frame(f)
+        bt.grid(row=3, column=0, columnspan=4, sticky="e")
+        ttk.Button(bt, text="OK", command=ok).pack(side="left", padx=4)
+        ttk.Button(bt, text="Отмена", command=win.destroy).pack(side="left")
+        win.bind("<Return>", ok)
+
+    def axis_now(inp):
+        """Текущее значение стороны оси inp («axis5+») в -1..1 или None."""
+        ax = st.get("axes") or []
+        if not inp or not inp.startswith("axis") or int(inp[4:-1]) >= len(ax):
+            return None
+        return ax[int(inp[4:-1])] * (1 if inp[-1] == "+" else -1)
+
+    def pedal_range(parent, kind, title):
+        pd = pad_settings()
+        if not (pd[kind] or "").startswith("axis"):
+            messagebox.showinfo(APP_NAME, "Диапазон задаётся для педали на оси. Сначала нажмите «Назначить…» и нажмите педаль.", parent=parent)
+            return
+
+        def done(a, b):
+            pd[kind + "_min"], pd[kind + "_max"] = a, b
+            parent.event_generate("<<PadRange>>")
+        range_dialog(parent, "Диапазон: " + title.rstrip(":"),
+                     "Педаль работает плавно в этом диапазоне нажатия оси. Что выше «до» — игнорируется "
+                     "(это место можно отдать лепесткам на той же оси).", pd[kind + "_min"], pd[kind + "_max"], 0,
+                     lambda: axis_now(pd[kind]), done)
+
     def edit_threshold():
         b = selected()
         if not b:
@@ -1503,21 +1570,17 @@ def main():
         if not b["input"].startswith("axis"):
             messagebox.showinfo(APP_NAME, "Диапазон задаётся только у привязок к оси. «%s» — это кнопка." % input_label(b["input"]))
             return
-        v = simpledialog.askinteger(APP_NAME, "Срабатывает от, % нажатия оси (5–95):",
-                                    initialvalue=b["threshold"], minvalue=5, maxvalue=95)
-        if not v:
-            return
-        m = simpledialog.askinteger(APP_NAME, "…и до, % (%d–100; 100 — до упора):" % v,
-                                    initialvalue=max(b.get("max", 100), v), minvalue=v, maxvalue=100)
-        if not m:
-            return
-        b["threshold"], b["max"] = v, m
-        save()
-        refresh()
-        ov = axis_overlap(b, bindings(), pad_settings())
-        if ov:
-            messagebox.showwarning(APP_NAME, "Диапазон %d–%d%% пересекается с: %s.\nОба действия будут срабатывать "
-                                   "одновременно — разведите диапазоны." % (v, m, ", ".join(ov)))
+        def done(a, m):
+            b["threshold"], b["max"] = a, m
+            save()
+            refresh()
+            ov = axis_overlap(b, bindings(), pad_settings())
+            if ov:
+                messagebox.showwarning(APP_NAME, "Диапазон %d–%d%% пересекается с: %s.\nОба действия будут срабатывать "
+                                       "одновременно — разведите диапазоны." % (a, m, ", ".join(ov)))
+        range_dialog(root, "Диапазон оси: %s" % input_label(b["input"]),
+                     "Клавиша «%s» нажимается, пока ось нажата в этом диапазоне (100 = до упора)." % key_label(b["key"]),
+                     b["threshold"], b.get("max", 100), 5, lambda: axis_now(b["input"]), done)
 
     tree.bind("<Double-1>", lambda e: pad_dialog() if (tree.selection() or [""])[0].startswith("pad_") else edit_label())
 
@@ -1599,7 +1662,7 @@ def main():
         win.grab_set()
         en, inv = tk.BooleanVar(value=pd["enabled"]), tk.BooleanVar(value=pd["invert"])
         dz, rg = tk.IntVar(value=pd["deadzone"]), tk.IntVar(value=pd["range"])
-        pmax = {"throttle": tk.IntVar(value=pd["throttle_max"]), "brake": tk.IntVar(value=pd["brake_max"])}
+        rng_var = {"throttle": tk.StringVar(), "brake": tk.StringVar()}
         ax_var, thr_var, brk_var = tk.StringVar(), tk.StringVar(), tk.StringVar()
         live, msg = tk.StringVar(), tk.StringVar()
         st["pad_live"] = live
@@ -1608,10 +1671,13 @@ def main():
         f.pack(fill="both")
 
         def show():
+            for k in rng_var:
+                rng_var[k].set("%d–%d %%" % (pd[k + "_min"], pd[k + "_max"]))
             ax_var.set("Ось %s" % (AXIS_NAMES[pd["axis"]] if pd["axis"] < len(AXIS_NAMES) else pd["axis"]))
             thr_var.set(input_label(pd["throttle"]) if pd["throttle"] else "не назначено")
             brk_var.set(input_label(pd["brake"]) if pd["brake"] else "не назначено")
         show()
+        win.bind("<<PadRange>>", lambda e: show())
 
         def learn_axis():
             msg.set("Поверните руль в сторону (1 с до этого не трогайте).")
@@ -1645,7 +1711,7 @@ def main():
         ttk.Label(f, textvariable=ax_var, width=20).grid(row=1, column=1, sticky="w")
         ttk.Button(f, text="Определить поворотом…", command=learn_axis).grid(row=1, column=2, columnspan=2, sticky="w")
         ttk.Checkbutton(f, text="Инвертировать поворот", variable=inv).grid(row=2, column=1, columnspan=3, sticky="w")
-        ttk.Label(f, text="Мёртвая зона в центре, %:").grid(row=3, column=0, sticky="w")
+        ttk.Label(f, text="Мёртвая зона руля в центре, %:").grid(row=3, column=0, sticky="w")
         ttk.Spinbox(f, from_=0, to=30, textvariable=dz, width=5).grid(row=3, column=1, sticky="w")
         ttk.Label(f, text="Полный поворот колёс при, % хода руля:").grid(row=4, column=0, sticky="w")
         ttk.Spinbox(f, from_=10, to=100, textvariable=rg, width=5).grid(row=4, column=1, sticky="w")
@@ -1654,8 +1720,8 @@ def main():
             ttk.Label(f, textvariable=v, width=20).grid(row=r, column=1, sticky="w")
             ttk.Button(f, text="Назначить…", command=lambda k=kind: learn_pedal(k)).grid(row=r, column=2, padx=2)
             ttk.Button(f, text="Сбросить", command=lambda k=kind: clear(k)).grid(row=r, column=3)
-            ttk.Label(f, text="до, %:").grid(row=r, column=4, padx=(8, 2))
-            ttk.Spinbox(f, from_=5, to=100, textvariable=pmax[kind], width=5).grid(row=r, column=5)
+            ttk.Label(f, textvariable=rng_var[kind], width=10).grid(row=r, column=4, padx=(8, 2))
+            ttk.Button(f, text="Диапазон…", command=lambda k=kind, t=t: pedal_range(win, k, t)).grid(row=r, column=5)
         dlg_vg = tk.Label(f, anchor="w", justify="left", wraplength=480)
         dlg_vg.grid(row=11, column=0, columnspan=3, sticky="w", pady=(8, 0))
         vtext, vok = vigem_status(vigem_installed(), pd["enabled"])
@@ -1671,8 +1737,7 @@ def main():
 
         def ok():
             try:
-                pd.update(deadzone=dz.get(), range=rg.get(), throttle_max=pmax["throttle"].get(),
-                          brake_max=pmax["brake"].get())
+                pd.update(deadzone=dz.get(), range=rg.get())
             except tk.TclError:
                 pass
             pd.update(enabled=en.get(), invert=inv.get())
@@ -1825,6 +1890,7 @@ def main():
             live_var.set("  ".join("%s=%+4d%%" % (AXIS_NAMES[i] if i < len(AXIS_NAMES) else i, round(v * 100)) for i, v in enumerate(axes[:8])))
             pr = pressed_inputs(buttons, hats)
             now_var.set("Нажато на руле: " + (", ".join(input_label(p) for p in pr) or "—"))
+            st["axes"] = axes
             st["pad_vals"] = pad_values(pad_settings(), axes, buttons, hats)
             if st.get("pad_live") is not None:
                 v = st["pad_vals"]

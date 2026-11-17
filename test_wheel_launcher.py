@@ -43,6 +43,8 @@ def test_detect_and_keys():
     from wheel_launcher import axis_overlap, pedal_value, sanitize_pad
     pad_b = {"input": "axis3+", "key": "e", "threshold": 90, "max": 100}
     pd2 = sanitize_pad(dict(pd, throttle_max=85))
+    assert sanitize_pad({"deadzone": 7})["throttle_min"] == 7 and sanitize_pad({"throttle_min": 0})["throttle_min"] == 0
+    assert pedal_value("axis3+", [0, 0, 0, 0.5], [], [], 60, 100) == 0.0     # ниже «от» — не педаль
     assert axis_overlap(pad_b, [pad_b], pd2) == []
     assert axis_overlap(dict(pad_b, threshold=80), [], pd2) == ["газ геймпада"]
     assert pedal_value("axis3+", [0, 0, 0, 0.5], [], [], 3, 85) > 0.4 and pedal_value("axis3+", [0, 0, 0, 1.0], [], [], 3, 85) == 0.0
