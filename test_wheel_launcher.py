@@ -31,6 +31,14 @@ def test_detect_and_keys():
     assert detect_input([0, 0], [0, -0.9], [0], []) == "axis1-"
     assert detect_input([0], [0.1], [0, 1], []) == "btn1"
     assert detect_input([0], [0], [], [(-1, 0)]) == "hat0L"
+    assert detect_input([0, 0], [0, 0.9], [0, 1], []) == "btn1"       # кнопка важнее соседней оси
+    from wheel_launcher import input_conflict, PAD_DEFAULT
+    pd = dict(PAD_DEFAULT, enabled=True, axis=0, throttle="axis3+")
+    sw = {"next": {"input": "btn9"}, "prev": {}}
+    bs = [{"input": "btn5", "key": "e"}]
+    assert input_conflict("axis3+", bs, pd, sw) and input_conflict("axis0-", bs, pd, sw)
+    assert input_conflict("btn5", bs, pd, sw) and input_conflict("btn9", bs, pd, sw)
+    assert input_conflict("btn6", bs, pd, sw) is None and input_conflict("axis3+", bs, pd, sw, "throttle") is None
     assert key_from_event(0x41, "Cyrillic_ef") == "a"
 
 

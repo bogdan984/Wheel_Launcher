@@ -18,7 +18,7 @@ import time
 
 IS_WIN = sys.platform == "win32"
 APP_NAME = "Wheel Launcher"
-APP_VERSION = "2.3.4"
+APP_VERSION = "2.3.5"
 RES_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
 AXIS_NAMES = ["X", "Y", "Z", "R", "U", "V"]
 HYST = 0.10  # гистерезис оси: отпускается на 10 % ниже порога нажатия
@@ -372,11 +372,8 @@ class Engine(object):
 
 
 def detect_input(base_axes, axes, buttons, hats):
-    """Что пользователь сейчас задействовал: ось (сдвиг от базы > 50 %), кнопка или D-pad. Иначе None."""
-    for n, v in enumerate(axes):
-        d = v - base_axes[n]
-        if abs(d) > 0.5:
-            return "axis%d%s" % (n, "+" if d > 0 else "-")
+    """Что пользователь сейчас задействовал: кнопка, D-pad или ось (сдвиг от базы > 50 %). Иначе None.
+    Кнопки и D-pad проверяются первыми: нажатая кнопка не должна «превращаться» в соседнюю ось."""
     for n, p in enumerate(buttons):
         if p:
             return "btn%d" % n
@@ -384,6 +381,10 @@ def detect_input(base_axes, axes, buttons, hats):
         for k, d in HAT_DIRS.items():
             if tuple(h) == d:
                 return "hat%d%s" % (n, k)
+    for n, v in enumerate(axes):
+        d = v - base_axes[n]
+        if abs(d) > 0.5:
+            return "axis%d%s" % (n, "+" if d > 0 else "-")
     return None
 
 
@@ -503,6 +504,25 @@ def cycle_profile(cfg, step):
 def switch_inputs(cfg):
     """Входы руля, занятые переключением профилей: в привязках профиля они не срабатывают."""
     return {s["input"] for s in cfg["switch"].values() if s.get("input")}
+
+
+def input_conflict(inp, binds, pd, switch, skip=None):
+    """Чем уже занят вход руля inp (текст) или None. Один вход — одно действие: привязка клавиши, руль/газ/тормоз
+    геймпада (если он включён), переключение профилей. skip — что не считать (то, что сейчас переназначается):
+    "steer", "throttle", "brake", "next", "prev" или сама привязка (dict)."""
+    for b in binds:
+        if b is not skip and b["input"] == inp:
+            return "привязка к клавише «%s»" % key_label(b["key"])
+    if pd["enabled"]:
+        if skip != "steer" and inp in ("axis%d+" % pd["axis"], "axis%d-" % pd["axis"]):
+            return "поворот руля (геймпад)"
+        for k, t in (("throttle", "газ (геймпад)"), ("brake", "тормоз (геймпад)")):
+            if skip != k and pd[k] == inp:
+                return t
+    for k, t in (("next", "переключение на следующий профиль"), ("prev", "переключение на предыдущий профиль")):
+        if skip != k and switch[k].get("input") == inp:
+            return t
+    return None
 
 
 class Switcher(object):
@@ -1317,6 +1337,17 @@ def main():
         st["learn"] = {"base": list(axes), "msg": msg, "done": done}
         win.bind("<Destroy>", lambda e: st.update(learn=None) if e.widget is win else None, add="+")
 
+    def learn_free(win, msg, done, skip=None):
+        """learn_wheel, но занятый другим действием вход не принимается: сообщаем, чем занят, и ждём другой."""
+        def check(inp):
+            who = input_conflict(inp, bindings(), pad_settings(), cfg["switch"], skip)
+            if who is None:
+                done(inp)
+                return
+            msg.set("«%s» уже занято: %s.\nОтпустите и выберите другой вход." % (input_label(inp), who))
+            win.after(1000, lambda: win.winfo_exists() and learn_wheel(win, msg, check))
+        learn_wheel(win, msg, check)
+
     def ask_label(b):
         v = simpledialog.askstring(APP_NAME, "Подпись для «%s» (например: Ручник, Передача вверх):"
                                    % input_label(b["input"]), initialvalue=b["label"], parent=root)
@@ -1409,7 +1440,7 @@ def main():
             finish(key)
 
         win.bind("<KeyPress>", on_key)
-        learn_wheel(win, msg, on_input)
+        learn_free(win, msg, on_input)
         win.focus_force()
 
     def selected():
@@ -1482,7 +1513,7 @@ def main():
                 msg.set("Назначено: %s" % input_label(inp))
                 show_rows()
                 refresh()
-            learn_wheel(win, msg, done)
+            learn_free(win, msg, done, n)
 
         def set_key(n):
             waiting["key"] = n
@@ -1556,7 +1587,7 @@ def main():
                 else:
                     msg.set("Это не ось. Поверните руль.")
                 show()
-            learn_wheel(win, msg, done)
+            learn_free(win, msg, done, "steer")
 
         def learn_pedal(kind):
             msg.set("Нажмите педаль или кнопку (1 с до этого не трогайте руль и педали).")
@@ -1565,7 +1596,7 @@ def main():
                 pd[kind] = inp
                 msg.set("Назначено: %s" % input_label(inp))
                 show()
-            learn_wheel(win, msg, done)
+            learn_free(win, msg, done, kind)
 
         def clear(kind):
             pd[kind] = None
