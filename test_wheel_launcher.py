@@ -36,15 +36,24 @@ def test_detect_and_keys():
     pd = dict(PAD_DEFAULT, enabled=True, axis=0, throttle="axis3+")
     sw = {"next": {"input": "btn9"}, "prev": {}}
     bs = [{"input": "btn5", "key": "e"}]
-    assert input_conflict("axis3+", bs, pd, sw) and input_conflict("axis0-", bs, pd, sw)
+    assert input_conflict("axis0-", bs, pd, sw) and input_conflict("axis3+", bs, pd, sw) is None   # ось делится по диапазонам
     assert input_conflict("btn5", bs, pd, sw) and input_conflict("btn9", bs, pd, sw)
-    assert input_conflict("btn6", bs, pd, sw) is None and input_conflict("axis3+", bs, pd, sw, "throttle") is None
+    assert input_conflict("btn6", bs, pd, sw) is None
+    # окно оси: лепесток 90–100 %, газ на той же оси до 85 %
+    from wheel_launcher import axis_overlap, pedal_value, sanitize_pad
+    pad_b = {"input": "axis3+", "key": "e", "threshold": 90, "max": 100}
+    pd2 = sanitize_pad(dict(pd, throttle_max=85))
+    assert axis_overlap(pad_b, [pad_b], pd2) == []
+    assert axis_overlap(dict(pad_b, threshold=80), [], pd2) == ["газ геймпада"]
+    assert pedal_value("axis3+", [0, 0, 0, 0.5], [], [], 3, 85) > 0.4 and pedal_value("axis3+", [0, 0, 0, 1.0], [], [], 3, 85) == 0.0
+    e2 = Engine(NullInput()); assert Engine._active(pad_b, False, [0, 0, 0, 1.0], [], []) and not Engine._active(pad_b, False, [0, 0, 0, 0.5], [], [])
+    assert not Engine._active(dict(pad_b, threshold=30, max=85), False, [0, 0, 0, 1.0], [], [])
     assert key_from_event(0x41, "Cyrillic_ef") == "a"
 
 
 def test_old_config_migrates():
     cfg = sanitize_config({"current": "SnowRunner", "profiles": {"SnowRunner": [{"input": "btn1", "key": "w"}]}})
-    assert cfg["profiles"]["SnowRunner"][0] == {"input": "btn1", "key": "w", "threshold": 30, "label": ""}
+    assert cfg["profiles"]["SnowRunner"][0] == {"input": "btn1", "key": "w", "threshold": 30, "max": 100, "label": ""}
     assert cfg["switch"]["next"] == {"input": None, "key": None} and cfg["overlay"]["enabled"] is True
     assert sanitize_config({"current": "нет", "profiles": {}})["current"] == "Forza Horizon"
 
@@ -82,9 +91,9 @@ def test_profile_export_import(tmp_path):
     from wheel_launcher import export_profile, import_profile, unique_name
     import pytest
     f = str(tmp_path / "p.json")
-    export_profile(f, "Гонка", [{"input": "btn3", "key": "w", "threshold": 30, "label": "Газ"}])
+    export_profile(f, "Гонка", [{"input": "btn3", "key": "w", "threshold": 30, "max": 100, "label": "Газ"}])
     n, bl, pad = import_profile(f)
-    assert (n, bl) == ("Гонка", [{"input": "btn3", "key": "w", "threshold": 30, "label": "Газ"}])
+    assert (n, bl) == ("Гонка", [{"input": "btn3", "key": "w", "threshold": 30, "max": 100, "label": "Газ"}])
     assert pad["enabled"] is False
     assert unique_name("Гонка", {"Гонка": [], "Гонка (2)": []}) == "Гонка (3)"
     (tmp_path / "bad.json").write_text('{"a": 1}')
@@ -113,7 +122,7 @@ def test_steer_and_pedals():
     pd = sanitize_pad({"enabled": True, "axis": 0, "throttle": "axis1-", "brake": "axis1+"})
     st_, gas, brk = pad_values(pd, axes, [], [])
     assert 0.3 < st_ < 0.5 and gas > 0.7 and brk == 0.0
-    assert pad_busy(pd) == {"axis0+", "axis0-", "axis1-", "axis1+"} and pad_busy(sanitize_pad(None)) == set()
+    assert pad_busy(pd) == {"axis0+", "axis0-"} and pad_busy(sanitize_pad(None)) == set()
 
 
 def test_pad_output_routes_buttons_and_axes(monkeypatch):
@@ -200,8 +209,8 @@ def test_copy_settings_between_profiles():
                                          "Обзор": [{"input": "btn1", "key": "x"}, {"input": "btn5", "key": "q"}]},
                            "pads": {"Движение": {"enabled": True, "axis": 2, "range": 80, "throttle": "axis1-", "brake": "axis1+"}}})
     assert copy_settings(cfg, "Движение", [0], True, False, ["Обзор", "Движение"]) == 1   # себя пропускаем
-    assert cfg["profiles"]["Обзор"] == [{"input": "btn1", "key": "w", "threshold": 30, "label": ""},
-                                        {"input": "btn5", "key": "q", "threshold": 30, "label": ""}]   # заменена, не продублирована
+    assert cfg["profiles"]["Обзор"] == [{"input": "btn1", "key": "w", "threshold": 30, "max": 100, "label": ""},
+                                        {"input": "btn5", "key": "q", "threshold": 30, "max": 100, "label": ""}]   # заменена, не продублирована
     p = cfg["pads"]["Обзор"]
     assert p["axis"] == 2 and p["range"] == 80 and p["enabled"] and p["throttle"] is None   # педали не отмечены
     copy_settings(cfg, "Движение", [1], False, True, ["Обзор"])
