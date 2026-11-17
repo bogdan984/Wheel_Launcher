@@ -18,7 +18,7 @@ import time
 
 IS_WIN = sys.platform == "win32"
 APP_NAME = "Wheel Launcher"
-APP_VERSION = "2.3.1"
+APP_VERSION = "2.3.2"
 RES_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
 AXIS_NAMES = ["X", "Y", "Z", "R", "U", "V"]
 HYST = 0.10  # гистерезис оси: отпускается на 10 % ниже порога нажатия
@@ -1673,10 +1673,24 @@ def main():
             if not sel or not to:
                 messagebox.showinfo(APP_NAME, "Отметьте, что копировать, и в какие профили.", parent=win)
                 return
-            copy_settings(cfg, cfg["current"], [i - 2 for i in sel if i >= 2], 0 in sel, 1 in sel, to)
-            save()
+            idx, steer, pedals = [i - 2 for i in sel if i >= 2], 0 in sel, 1 in sel
+            sp = pad_settings()
+            try:
+                copy_settings(cfg, cfg["current"], idx, steer, pedals, to)
+                save()
+            except Exception as e:
+                messagebox.showerror(APP_NAME, "Не удалось скопировать: %r" % (e,), parent=win)
+                return
             win.destroy()
-            messagebox.showinfo(APP_NAME, "Скопировано в профили: %s." % ", ".join(to))
+            done = ["привязок: %d" % len(idx)] if idx else []
+            if steer or pedals:
+                done.append("руль/педали геймпада (смотрите в «Геймпад…», в списке привязок их нет)")
+                if not sp["enabled"] and not sp["throttle"] and not sp["brake"]:
+                    done.append("ВНИМАНИЕ: в исходном профиле геймпад не настроен")
+            first = to[0]
+            switch_profile(first)
+            messagebox.showinfo(APP_NAME, "Скопировано в профили: %s.\n%s.\nОткрыт профиль «%s»." % (
+                ", ".join(to), "; ".join(done), first))
         bt = ttk.Frame(win)
         bt.grid(row=1, column=0, columnspan=2, sticky="e", padx=8, pady=(0, 8))
         ttk.Button(bt, text="Отмена", command=win.destroy).pack(side="right", padx=4)
